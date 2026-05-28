@@ -1,266 +1,208 @@
-# ⚕ Clinical Trial Failure Intelligence System — MVP v1
+# Clinical Trial Failure Intelligence System
 
-> Ingest terminated clinical trials from ClinicalTrials.gov, classify failure reasons, score salvageability, and generate rescue strategies.
-
----
-
-## Architecture
-
-```
-┌─────────────────────┐     ┌──────────────────────┐     ┌─────────────┐
-│  Next.js Frontend   │────▶│  FastAPI Backend      │────▶│  PostgreSQL │
-│  (TailwindCSS)      │     │  (Python 3.11)        │     │  Database   │
-│  localhost:3000     │     │  localhost:8000       │     │  port:5432  │
-└─────────────────────┘     └──────────────────────┘     └─────────────┘
-                                      │
-                                      ▼
-                            ClinicalTrials.gov API v2
-                            https://clinicaltrials.gov
-```
+AI-assisted system to ingest terminated clinical trials, classify why they stopped, estimate salvageability, and recommend possible rescue strategies.
 
 ---
 
-## Quick Start (Docker — Recommended)
+## Table of Contents
+- Overview
+- Features
+- Architecture
+- Quickstart (Docker)
+- Local development (backend & frontend)
+- Environment variables
+- Database & migrations
+- API reference
+- Project structure (key files)
+- Contributing & license
 
-### Prerequisites
-- Docker & Docker Compose installed
+---
 
-### 1. Clone and start
+**Overview**
+
+This repository contains an MVP for analyzing terminated clinical trials to find potentially salvageable drug assets. The backend ingests trials (ClinicalTrials.gov), classifies failure reasons using an LLM pipeline (primary: Ollama / Qwen3), computes a salvageability score, and exposes a REST API consumed by a Next.js frontend.
+
+**Core goals**: collect failed trial data, classify failure modes (e.g. toxicity, lack of efficacy, recruitment failure), estimate salvageability, and surface actionable recommendations.
+
+---
+
+**Features**
+- **Ingestion**: fetch failed trials and upsert into a Postgres DB.
+- **Classification**: LLM-driven classification with a BiomedBERT fallback and confidence blending.
+- **Dashboard/API**: browse trials, filter, update and view detailed classification results.
+- **Extensible**: modular services for fetcher, classifier, and trial persistence.
+
+---
+
+**Architecture (high level)**
+
+ClinicalTrials.gov → fetcher → classifier (Ollama + heuristics) → Postgres DB → API → Next.js frontend
+
+---
+
+**Quickstart (Docker)**
+
+1. Build and start all services (Postgres, Ollama, backend, frontend):
+
 ```bash
-cd clinical-trial-intelligence
-docker-compose up --build
+docker-compose up -d --build
 ```
 
-### 2. Wait for all services to start (~60s first time)
+2. Services and default ports:
+- Postgres: `5433` (container exposes 5432)
+- Ollama API: `11434`
+- Backend (FastAPI/uvicorn): `8001` (proxied to container 8000)
+- Frontend (Next.js): `3001` (proxied to container 3000)
 
-### 3. Open the app
-- **Frontend:** http://localhost:3001
-- **Backend API docs:** http://localhost:8001/docs
+3. Verify API docs: open `http://localhost:8001/docs`
 
-### 4. Ingest your first batch of trials
-Go to **http://localhost:3000/ingest** and click **Run Ingestion** with default settings.
+Refer to [docker-compose.yml](docker-compose.yml) for service configs.
 
 ---
 
-## Manual Setup (No Docker)
+**Local development — Backend**
 
-### Prerequisites
-- Python 3.10+
-- Node.js 18+
-- PostgreSQL 14+
+Prerequisites: Python 3.11+, pip, Postgres (or use Docker compose above).
 
-### Backend Setup
+1. Create a virtualenv and install dependencies:
 
 ```bash
 cd backend
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-
-# Install dependencies
+python -m venv .venv
+source .venv/bin/activate   # on Windows: .venv\\Scripts\\activate
 pip install -r requirements.txt
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your DATABASE_URL
-
-# Run database migrations
-alembic upgrade head
-
-# Start server
-uvicorn app.main:app --reload --port 8000
 ```
 
-### Frontend Setup
+2. Environment variables (example `.env`):
+
+```
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/clinical_trials
+OLLAMA_URL=http://localhost:11434/api/generate
+```
+
+3. Initialize DB tables (SQLAlchemy creates tables on startup) and run the app:
+
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+4. Useful backend files:
+- API & router entry: [backend/app/main.py](backend/app/main.py#L1)
+- Trials routes: [backend/app/api/trials.py](backend/app/api/trials.py#L1)
+- Classification route: [backend/app/api/classify.py](backend/app/api/classify.py#L1)
+- Ingest route: [backend/app/api/ingest.py](backend/app/api/ingest.py#L1)
+- DB config: [backend/app/database/db.py](backend/app/database/db.py#L1)
+- Models: [backend/app/models/trial.py](backend/app/models/trial.py#L1)
+- Classifier implementation: [backend/app/services/ml_classifier.py](backend/app/services/ml_classifier.py#L1)
+- Requirements: [backend/requirements.txt](backend/requirements.txt)
+
+---
+
+**Local development — Frontend**
+
+1. From the repo root:
 
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Configure environment
-cp .env.example .env.local
-# Edit .env.local — set NEXT_PUBLIC_API_URL=http://localhost:8000
-
-# Start dev server
 npm run dev
 ```
 
----
-
-## Usage Workflow
-
-### Step 1: Ingest Data
-Navigate to `/ingest` and trigger ingestion from ClinicalTrials.gov.
-- Set `max_results` (start with 50-100)
-- Optionally filter by condition (e.g. "cancer") or drug
-- Click **Run Ingestion** — takes 30-60s
-
-### Step 2: Explore Dashboard
-The `/` dashboard shows:
-- Total trials, average salvageability score
-- Failure category distribution chart
-- Top 5 most salvageable assets
-
-### Step 3: Browse & Filter Trials
-Navigate to `/trials` to:
-- Search by drug name, disease, sponsor, or NCT ID
-- Filter by failure category, phase, status
-- Set minimum salvageability score
-
-### Step 4: Review Trial Details
-Click any trial to see:
-- Full termination reason
-- AI-classified failure category
-- Salvageability score (0–100 gauge)
-- Specific rescue recommendations
-- Links to ClinicalTrials.gov and PubMed
-
-### Step 5: Use the Classifier
-Go to `/classify` to test classification on any custom text:
-```
-"Study terminated due to insufficient enrollment at trial sites"
-→ Recruitment failure | Score: 80 | Recommendations: ...
-```
+2. Ensure the frontend can reach the backend by setting `NEXT_PUBLIC_API_URL` (defaults in `docker-compose.yml` to `http://localhost:8001`). See [frontend/package.json](frontend/package.json) for scripts.
 
 ---
 
-## API Reference
+**Environment variables**
+- `DATABASE_URL`: SQLAlchemy DB URL (defaults to `postgresql://postgres:postgres@localhost:5432/clinical_trials` in development). See [backend/app/database/db.py](backend/app/database/db.py#L1).
+- `OLLAMA_URL`: Ollama generate endpoint (e.g. `http://ollama:11434/api/generate`). Default set in [docker-compose.yml](docker-compose.yml).
+- `NEXT_PUBLIC_API_URL`: Frontend API base URL (e.g. `http://localhost:8001`). See [frontend/package.json](frontend/package.json).
 
-### Endpoints
+---
 
-| Method | Route | Description |
-|--------|-------|-------------|
-| GET | `/trials/` | List all trials (paginated, filterable) |
-| GET | `/trials/stats` | Dashboard statistics |
-| GET | `/trials/{id}` | Fetch single trial by ID |
-| GET | `/trials/nct/{nct_id}` | Fetch trial by NCT ID |
-| POST | `/classify/` | Classify a termination reason |
-| POST | `/ingest/` | Trigger ClinicalTrials.gov ingestion |
+**Database & migrations**
 
-Full interactive docs at: **http://localhost:8000/docs**
+This project uses SQLAlchemy models and Alembic for migrations. Alembic config is present at `backend/alembic.ini`.
 
-### Example: Classify a Reason
+Common commands (run from `backend`):
+
 ```bash
-curl -X POST http://localhost:8000/classify/ \
-  -H "Content-Type: application/json" \
-  -d '{"why_stopped": "Study stopped due to futility at interim analysis"}'
+# generate migration after model changes
+alembic revision --autogenerate -m "describe change"
+# apply migrations
+alembic upgrade head
 ```
 
-Response:
-```json
-{
-  "why_stopped": "Study stopped due to futility at interim analysis",
-  "failure_category": "Lack of efficacy",
-  "salvageability_score": 25,
-  "recommended_actions": [
-    "Investigate biomarker-stratified patient subgroups",
-    "Explore combination therapy approaches",
-    ...
-  ]
-}
-```
+If you prefer Docker-managed DB for local dev, `docker-compose up` will create the `db` service automatically.
 
 ---
 
-## Classification Logic
+**API reference (selected endpoints)**
 
-| Failure Category | Keywords (examples) | Base Score |
-|------------------|---------------------|------------|
-| Business termination | sponsor decision, portfolio, funding | 85 |
-| Recruitment failure | enrollment, accrual, insufficient patients | 80 |
-| Operational issue | protocol deviation, site closure, supply | 70 |
-| Endpoint failure | primary endpoint not met, futility | 60 |
-| Lack of efficacy | no benefit, no response, not effective | 25 |
-| Toxicity | adverse event, hepatotoxic, safety concern | 20 |
-| Unknown | (no match) | 40 |
+Base: `GET /` → simple API metadata
 
-**Score modifiers:**
-- Phase 1 trials: +5 (earlier stage = more room for optimization)
-- Severe adverse events (fatal/death): -15
-- Partial efficacy signals detected in text: +10
+- `GET /health` — health check
+- `GET /trials` — list trials with pagination and filters
+  - Query params: `page`, `page_size`, `search`, `phase`, `failure_category`, `overall_status`, `min_score`, `max_score`
+  - See implementation: [backend/app/api/trials.py](backend/app/api/trials.py#L1)
+- `GET /trials/stats` — dashboard statistics
+- `GET /trials/{trial_id}` — fetch by internal id
+- `GET /trials/nct/{nct_id}` — fetch by NCT identifier
+- `PATCH /trials/{trial_id}` — partial update (salvageability, category, recommended actions)
+- `DELETE /trials/{trial_id}` — delete trial
 
----
+- `POST /classify` — classify termination reason
+  - Body: `{ "why_stopped": "...", "drug_name": "...", "phase": "..." }`
+  - Response: classification category, score, recommended actions. See: [backend/app/api/classify.py](backend/app/api/classify.py#L1)
 
-## Deployment
+- `POST /ingest` — run an ingestion synchronously
+  - Query params: `max_results`, `condition`, `intervention`
+- `POST /ingest/background` — enqueue ingestion as a background task
+  - Triggers fetcher → classifier → upsert pipeline. See: [backend/app/api/ingest.py](backend/app/api/ingest.py#L1)
 
-### Backend → Docker / Render / Railway
+Example curl (classify):
+
 ```bash
-docker build -t ctfis-backend ./backend
-docker run -p 8000:8000 -e DATABASE_URL=... ctfis-backend
-```
-
-### Frontend → Vercel
-```bash
-cd frontend
-npx vercel deploy
-# Set NEXT_PUBLIC_API_URL to your backend URL
-```
-
-### Database → Supabase
-1. Create a project at supabase.com
-2. Copy the connection string from Settings → Database
-3. Set it as `DATABASE_URL` in backend `.env`
-4. Run `alembic upgrade head`
-
----
-
-## Project Structure
-
-```
-clinical-trial-intelligence/
-├── backend/
-│   ├── app/
-│   │   ├── main.py              # FastAPI app entry point
-│   │   ├── api/
-│   │   │   ├── trials.py        # Trial CRUD endpoints
-│   │   │   ├── classify.py      # Classification endpoint
-│   │   │   └── ingest.py        # Ingestion endpoint
-│   │   ├── models/
-│   │   │   ├── trial.py         # SQLAlchemy model
-│   │   │   └── schemas.py       # Pydantic schemas
-│   │   ├── services/
-│   │   │   ├── classifier.py    # Rule-based NLP classifier
-│   │   │   ├── fetcher.py       # ClinicalTrials.gov API client
-│   │   │   └── trial_service.py # CRUD service layer
-│   │   └── database/
-│   │       └── db.py            # DB connection & session
-│   ├── migrations/              # Alembic migrations
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   └── alembic.ini
-├── frontend/
-│   ├── pages/
-│   │   ├── index.tsx            # Dashboard
-│   │   ├── trials/
-│   │   │   ├── index.tsx        # Trial list
-│   │   │   └── [id].tsx         # Trial detail
-│   │   ├── classify.tsx         # Classifier tool
-│   │   └── ingest.tsx           # Data ingestion
-│   ├── components/
-│   │   ├── Layout.tsx           # Sidebar + nav
-│   │   └── ui/index.tsx         # Reusable UI components
-│   ├── services/api.ts          # API client
-│   └── styles/globals.css       # Design system
-├── docker-compose.yml
-└── README.md
+curl -X POST "http://localhost:8001/classify" -H "Content-Type: application/json" \
+  -d '{"why_stopped":"Stopped for futility at interim analysis","drug_name":"ExampleDrug","phase":"Phase 2"}'
 ```
 
 ---
 
-## Extending the MVP
-
-Once MVP is validated, the PRD specifies these next-phase features:
-- **PubMed integration** — link trials to publications
-- **ML classifier** — replace keyword rules with a trained model
-- **Vector search** — semantic similarity across trial descriptions
-- **Knowledge graphs** — drug-disease-mechanism relationships
-- **Patent analysis** — IP landscape for salvageable assets
+**Project structure (key files)**
+- [backend/](backend) — FastAPI backend and services
+  - [backend/app/main.py](backend/app/main.py#L1) — FastAPI app entry
+  - [backend/app/api/](backend/app/api) — API routes
+  - [backend/app/services/](backend/app/services) — fetcher, classifier, trial service
+  - [backend/app/models/](backend/app/models) — SQLAlchemy models and Pydantic schemas
+- [frontend/](frontend) — Next.js frontend
+- [docker-compose.yml](docker-compose.yml) — orchestrates DB, Ollama, backend, frontend
 
 ---
 
-## License
+**Development notes & tips**
+- Ollama: this project expects an on-prem Ollama instance (or accessible container). Pull `qwen3:1.7b` if you plan to run locally: `ollama pull qwen3:1.7b`.
+- The classifier blends an LLM confidence score with rule-based baseline scores; see [backend/app/services/ml_classifier.py](backend/app/services/ml_classifier.py#L1).
+- If using a remote Postgres (Heroku/Supabase), ensure `DATABASE_URL` begins with `postgresql://` (the backend auto-fixes `postgres://`).
 
-MIT
+---
+
+**Contributing**
+
+Contributions welcome — open an issue or PR. Suggested flow:
+1. Fork repository
+2. Create a feature branch
+3. Run tests / verify locally
+4. Open PR with description and screenshot (if UI changes)
+
+---
+
+**License & attribution**
+
+This project currently does not include a license file. Add a `LICENSE` to clarify terms.
+
+---
+
+If you'd like, I can also:
+- add API examples as a separate `docs/` folder
+- generate OpenAPI examples or a Postman collection
+- add CI steps for linting, tests, and Docker image builds
