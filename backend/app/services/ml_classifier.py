@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_URL        = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
 OLLAMA_MODEL      = "qwen3:1.7b"
-CONFIDENCE_THRESHOLD     = 0.15
+CONFIDENCE_THRESHOLD     = 0.35
 CONFIDENCE_FULL_TRUST    = 0.75   # above this, score is not blended
 UNKNOWN_BASELINE         = 40     # score we blend toward on low confidence
 
@@ -652,11 +652,14 @@ def full_analysis(
     phase:                    Optional[str] = None,
     intervention_description: Optional[str] = None,
     trial_context:            Optional[Dict[str, Any]] = None,
-) -> Tuple[str, int, List[str]]:
+) -> Tuple[str, int, List[str], str, Dict[str, Any]]:
     """
-    Full pipeline: classify → confidence-weight → score → recommend.
-    trial_context: full dict from fetcher containing all extended fields.
+    Full pipeline: classify → three-tier score → recommend.
+    Returns (category, score, recommendations, data_confidence, score_breakdown).
+    trial_context: full dict from fetcher containing all Tier 1/2/3 fields.
     """
+    from app.services.scorer import compute_three_tier_score
+
     # Merge convenience args into context dict
     ctx = dict(trial_context or {})
     if drug_name and not ctx.get("drug_name"):
@@ -664,22 +667,17 @@ def full_analysis(
     if phase and not ctx.get("phase"):
         ctx["phase"] = phase
 
-    effective_phase = ctx.get("phase", phase)
-
-    # ── Empty why_stopped ─────────────────────────────────────────────────────
+    # ── Step 1: Classification ────────────────────────────────────────────────
     if not why_stopped or not why_stopped.strip():
-        # Even with no termination text, try to infer from context
         category, confidence, llm_result = _classify_with_ollama("", ctx)
         if confidence < CONFIDENCE_THRESHOLD:
             category = "Unknown"
             llm_result = {}
     else:
-        # ── Step 1: Ollama with full context ──────────────────────────────────
         category, confidence, llm_result = _classify_with_ollama(why_stopped, ctx)
 
-        # ── Step 2: Embedding fallback if low confidence ──────────────────────
-        if confidence < CONFIDENCE_THRESHOLD:
-            # Build a combined text for embedding from why_stopped + title + condition
+        # Fallback only if Ollama crashed (confidence == 0.0)
+        if confidence == 0.0:
             combined = " ".join(filter(None, [
                 why_stopped,
                 ctx.get("title", ""),
@@ -690,19 +688,17 @@ def full_analysis(
                 category   = emb_cat
                 llm_result = {}
 
-    # ── Step 3: Modality ──────────────────────────────────────────────────────
+    # ── Step 2: Three-tier score calculation ───────────────────────────────────
+    score, data_confidence, score_breakdown = compute_three_tier_score(
+        category, confidence, llm_result, ctx
+    )
+
+    # ── Step 3: Recommendations ───────────────────────────────────────────────
     modality = detect_modality(
         ctx.get("drug_name", drug_name),
-        ctx.get("_intervention_type"),
-        ctx.get("_intervention_description", intervention_description),
+        ctx.get("_t1_intervention_type"),
+        ctx.get("_t1_intervention_description"),
     )
-
-    # ── Step 4: Score ─────────────────────────────────────────────────────────
-    score = compute_salvageability(
-        category, confidence, llm_result, modality, effective_phase
-    )
-
-    # ── Step 5: Recommendations ───────────────────────────────────────────────
     recs = get_recommendations(category, modality)
 
-    return category, score, recs
+    return category, score, recs, data_confidence, score_breakdown

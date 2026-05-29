@@ -30,8 +30,8 @@ def _run_ingest(
     for trial_data in trials:
         why_stopped = trial_data.get("why_stopped") or ""
 
-        # Pass full trial_context so the LLM gets every available field
-        category, score, recommendations = full_analysis(
+        # Pass full trial_context so the LLM + scorer get every available field
+        category, score, recommendations, data_confidence, score_breakdown = full_analysis(
             why_stopped,
             trial_context=trial_data,
         )
@@ -39,6 +39,8 @@ def _run_ingest(
         trial_data["failure_category"]     = category
         trial_data["salvageability_score"] = score
         trial_data["recommended_actions"]  = recommendations
+        trial_data["data_confidence"]      = data_confidence
+        trial_data["score_breakdown"]      = score_breakdown
 
         # Strip internal underscore keys before writing to DB
         db_data = {k: v for k, v in trial_data.items() if not k.startswith("_")}

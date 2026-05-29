@@ -21,5 +21,7 @@ class FailedTrial(Base):
     start_date = Column(String(20), nullable=True)
     completion_date = Column(String(20), nullable=True)
     enrollment = Column(Integer, nullable=True)
+    data_confidence = Column(String(20), nullable=True)  # low/medium/high
+    score_breakdown = Column(JSON, nullable=True)  # Three-tier breakdown
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
