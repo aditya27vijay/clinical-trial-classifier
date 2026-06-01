@@ -20,7 +20,7 @@ AI-assisted system to ingest terminated clinical trials, classify why they stopp
 
 **Overview**
 
-This repository contains an MVP for analyzing terminated clinical trials to find potentially salvageable drug assets. The backend ingests trials (ClinicalTrials.gov), classifies failure reasons using an LLM pipeline (primary: Ollama / Qwen3), computes a salvageability score, and exposes a REST API consumed by a Next.js frontend.
+This repository contains an MVP for analyzing terminated clinical trials to find potentially salvageable drug assets. The backend ingests trials (ClinicalTrials.gov), classifies failure reasons using an LLM pipeline with a new primary Groq model, computes a salvageability score, and exposes a REST API consumed by a Next.js frontend.
 
 **Core goals**: collect failed trial data, classify failure modes (e.g. toxicity, lack of efficacy, recruitment failure), estimate salvageability, and surface actionable recommendations.
 
@@ -36,7 +36,7 @@ This repository contains an MVP for analyzing terminated clinical trials to find
 
 **Architecture (high level)**
 
-ClinicalTrials.gov → fetcher → classifier (Ollama + heuristics) → Postgres DB → API → Next.js frontend
+ClinicalTrials.gov → fetcher → classifier (Groq Llama primary, Ollama fallback, embeddings emergency fallback) → Postgres DB → API → Next.js frontend
 
 ---
 
@@ -77,6 +77,8 @@ pip install -r requirements.txt
 
 ```
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/clinical_trials
+GROQ_API_KEY=<your-groq-api-key>
+GROQ_MODEL=llama-3.1-8b-instant
 OLLAMA_URL=http://localhost:11434/api/generate
 ```
 
@@ -114,6 +116,8 @@ npm run dev
 
 **Environment variables**
 - `DATABASE_URL`: SQLAlchemy DB URL (defaults to `postgresql://postgres:postgres@localhost:5432/clinical_trials` in development). See [backend/app/database/db.py](backend/app/database/db.py#L1).
+- `GROQ_API_KEY`: API key for Groq remote inference. When set, the backend uses Groq as the primary classifier.
+- `GROQ_MODEL`: Groq model name to use for classification. Default is `llama-3.3-70b-versatile`; this repo also supports overrides such as `llama-3.1-8b-instant` for lower-cost tests.
 - `OLLAMA_URL`: Ollama generate endpoint (e.g. `http://ollama:11434/api/generate`). Default set in [docker-compose.yml](docker-compose.yml).
 - `NEXT_PUBLIC_API_URL`: Frontend API base URL (e.g. `http://localhost:8001`). See [frontend/package.json](frontend/package.json).
 
@@ -180,7 +184,17 @@ curl -X POST "http://localhost:8001/classify" -H "Content-Type: application/json
 ---
 
 **Development notes & tips**
-- Ollama: this project expects an on-prem Ollama instance (or accessible container). Pull `qwen3:1.7b` if you plan to run locally: `ollama pull qwen3:1.7b`.
+- Groq / Groq API: the project now prefers Groq with a Llama-based model as the primary classification engine. Set `GROQ_API_KEY` and optionally `GROQ_MODEL` in `.env`.
+- Ollama: this project retains Ollama as a fallback. If Groq is unavailable or the Groq API key is missing, the classifier falls back to Ollama Qwen3:1.7b.
+- If both Groq and Ollama fail, the system uses a BiomedBERT embeddings emergency fallback to keep classification working.
+- Example low-cost override: `GROQ_MODEL=llama-3.1-8b-instant`.
+
+**Known limitations and drawbacks**
+- The new Groq primary flow introduces an external API dependency and requires a valid `GROQ_API_KEY`.
+- Groq model usage may increase latency and cost compared to the previous on-prem Ollama-only setup.
+- Smaller Llama variants like `llama-3.1-8b-instant` can reduce cost, but may also lower classification accuracy and confidence.
+- The fallback chain helps resilience, but each step may produce different category outputs and confidence scores.
+- Classification remains heuristic-driven for trial-specific failure modes; the model is not a medical-grade decision system and should be validated before production use.
 - The classifier blends an LLM confidence score with rule-based baseline scores; see [backend/app/services/ml_classifier.py](backend/app/services/ml_classifier.py#L1).
 - If using a remote Postgres (Heroku/Supabase), ensure `DATABASE_URL` begins with `postgresql://` (the backend auto-fixes `postgres://`).
 
