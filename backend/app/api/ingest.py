@@ -7,6 +7,7 @@ from app.services.fetcher import fetch_failed_trials
 from app.services.ml_classifier import full_analysis
 from app.services.trial_service import upsert_trial
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -35,6 +36,8 @@ def _run_ingest(
             why_stopped,
             trial_context=trial_data,
         )
+
+        time.sleep(5)  
 
         trial_data["failure_category"]     = category
         trial_data["salvageability_score"] = score
