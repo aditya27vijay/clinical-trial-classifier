@@ -36,7 +36,29 @@ This repository contains an MVP for analyzing terminated clinical trials to find
 
 **Architecture (high level)**
 
-ClinicalTrials.gov → fetcher → classifier (Groq Llama primary, Ollama fallback, embeddings emergency fallback) → Postgres DB → API → Next.js frontend
+This system is built as a molecule-first clinical trial intelligence stack.
+
+- `backend/` is a FastAPI service with SQLAlchemy models, a trial ingestion pipeline, an LLM-backed failure classifier, a three-tier salvageability scorer, and molecule deduplication + enrichment.
+- `frontend/` is a Next.js app that consumes the backend REST API and renders dashboards, trial details, molecule library pages, and classification/ingestion tools.
+- `docker-compose.yml` orchestrates:
+  - Postgres database
+  - Ollama local inference service
+  - FastAPI backend
+  - Next.js frontend
+
+Pipeline summary:
+1. Trial ingestion fetches terminated trials from an AACT/ClinicalTrials.gov-style source.
+2. The backend enriches trial metadata, builds context, and classifies failure reason.
+3. Classification uses Groq as the primary model, Ollama as a fallback, and BiomedBERT embeddings as an emergency fallback.
+4. The backend computes a salvageability score, records recommendations, and persists trials into Postgres.
+5. The pipeline resolves the trial drug into a canonical molecule, deduplicates molecule records, links trials to molecules, and aggregates molecule-level signals.
+6. Molecule enrichment may also gather patents and literature signals for BD-style insight.
+
+Key API routes:
+- `/classify` — classify a termination reason and return category, score, confidence, and recommendations
+- `/ingest` — fetch and persist terminated trials through the full ingestion/classification pipeline
+- `/trials` — list, filter, retrieve, update, and delete trial records
+- `/molecules` — browse molecules, retrieve molecule detail, and generate repurposing hypotheses
 
 ---
 
