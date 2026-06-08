@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { href: '/trials', label: 'Trials', icon: '⊞' },
   { href: '/classify', label: 'Classifier', icon: '◈' },
   { href: '/ingest', label: 'Ingest Data', icon: '⊕' },
+  { href: '/molecules', label: 'Molecules', icon: '⬡' },
 ];
 
 export default function Layout({ children }: { children: React.ReactNode }) {
