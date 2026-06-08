@@ -1,130 +1,124 @@
 # Clinical Trial Failure Intelligence System
 
-AI-assisted system to ingest terminated clinical trials, classify why they stopped, estimate salvageability, and recommend possible rescue strategies.
+Molecule-first AI system for ingesting failed clinical trials, classifying why they stopped, estimating rescue potential, and generating molecule intelligence insights.
 
 ---
 
 ## Table of Contents
 - Overview
-- Features
 - Architecture
+- Key features
 - Quickstart (Docker)
-- Local development (backend & frontend)
+- Local development
 - Environment variables
-- Database & migrations
 - API reference
-- Project structure (key files)
-- Contributing & license
+- Data model
+- Project structure
+- Notes
+- Contributing
 
 ---
 
-**Overview**
+## Overview
 
-This repository contains an MVP for analyzing terminated clinical trials to find potentially salvageable drug assets. The backend ingests trials (ClinicalTrials.gov), classifies failure reasons using an LLM pipeline with a new primary Groq model, computes a salvageability score, and exposes a REST API consumed by a Next.js frontend.
+This repository contains an MVP for analyzing terminated, withdrawn, and suspended clinical trials and surfacing potentially salvageable drug assets.
+The backend reads trial data from an AACT-style Postgres source, enriches each trial with design and results metadata, classifies trial failure reason through a layered LLM pipeline, computes a salvageability score, resolves drugs into canonical molecules, and enriches molecules with patent and PubMed evidence.
 
-**Core goals**: collect failed trial data, classify failure modes (e.g. toxicity, lack of efficacy, recruitment failure), estimate salvageability, and surface actionable recommendations.
-
----
-
-**Features**
-- **Ingestion**: fetch failed trials and upsert into a Postgres DB.
-- **Classification**: LLM-driven classification with a BiomedBERT fallback and confidence blending.
-- **Dashboard/API**: browse trials, filter, update and view detailed classification results.
-- **Extensible**: modular services for fetcher, classifier, and trial persistence.
+The frontend is a Next.js app that provides dashboards, trial browsing, molecule discovery, classification experiments, and ingestion controls.
 
 ---
 
-**Architecture (high level)**
+## Architecture
 
-This system is built as a molecule-first clinical trial intelligence stack.
+The stack consists of:
 
-- `backend/` is a FastAPI service with SQLAlchemy models, a trial ingestion pipeline, an LLM-backed failure classifier, a three-tier salvageability scorer, and molecule deduplication + enrichment.
-- `frontend/` is a Next.js app that consumes the backend REST API and renders dashboards, trial details, molecule library pages, and classification/ingestion tools.
-- `docker-compose.yml` orchestrates:
-  - Postgres database
-  - Ollama local inference service
-  - FastAPI backend
-  - Next.js frontend
+- `backend/` — FastAPI backend with SQLAlchemy persistence, ingestion logic, classification/scoring services, and molecule intelligence.
+- `frontend/` — Next.js UI that consumes backend endpoints.
+- `docker-compose.yml` — orchestrates Postgres, Ollama, backend, and frontend.
 
-Pipeline summary:
-1. Trial ingestion fetches terminated trials from an AACT/ClinicalTrials.gov-style source.
-2. The backend enriches trial metadata, builds context, and classifies failure reason.
-3. Classification uses Groq as the primary model, Ollama as a fallback, and BiomedBERT embeddings as an emergency fallback.
-4. The backend computes a salvageability score, records recommendations, and persists trials into Postgres.
-5. The pipeline resolves the trial drug into a canonical molecule, deduplicates molecule records, links trials to molecules, and aggregates molecule-level signals.
-6. Molecule enrichment may also gather patents and literature signals for BD-style insight.
+### Core pipeline
 
-Key API routes:
-- `/classify` — classify a termination reason and return category, score, confidence, and recommendations
-- `/ingest` — fetch and persist terminated trials through the full ingestion/classification pipeline
-- `/trials` — list, filter, retrieve, update, and delete trial records
-- `/molecules` — browse molecules, retrieve molecule detail, and generate repurposing hypotheses
+1. Fetch terminated trial metadata from an AACT-compatible Postgres database.
+2. Enrich trials with design, sponsor, site, safety, outcome, and publication metadata.
+3. Classify termination reasons using:
+   - Groq remote model (primary)
+   - Ollama local model (fallback)
+   - BiomedBERT embeddings (emergency fallback)
+4. Compute a three-tier salvageability score.
+5. Persist trials into `failed_trials`.
+6. Resolve trial drug names into canonical `molecules` records.
+7. Enrich molecules with patents, literature, and optional repurposing hypotheses.
 
 ---
 
-**Quickstart (Docker)**
+## Key features
 
-1. Build and start all services (Postgres, Ollama, backend, frontend):
+- Ingestion of terminated/withdrawn/suspended trials from AACT Postgres
+- LLM-backed failure category classification
+- Three-tier salvageability scoring model
+- Canonical molecule resolution using PubChem and ChEMBL
+- Molecule library with IP status, publication counts, and rescue signals
+- Excel export for BD-ready molecule reporting
+- Frontend dashboard, trial list, molecule library, classification page, and ingestion page
+- Background enrichment for patents and PubMed literature
+
+---
+
+## Quickstart (Docker)
+
+From the repository root:
 
 ```bash
 docker-compose up -d --build
 ```
 
-2. Services and default ports:
-- Postgres: `5433` (container exposes 5432)
-- Ollama API: `11434`
-- Backend (FastAPI/uvicorn): `8001` (proxied to container 8000)
-- Frontend (Next.js): `3001` (proxied to container 3000)
+Default ports:
 
-3. Verify API docs: open `http://localhost:8001/docs`
+- Postgres: `5433`
+- Ollama: `11434`
+- Backend: `8001`
+- Frontend: `3001`
 
-Refer to [docker-compose.yml](docker-compose.yml) for service configs.
+Open the backend docs at `http://localhost:8001/docs` and the frontend at `http://localhost:3001`.
+
+> Note: `docker-compose.yml` includes `AACT_DATABASE_URL` and expects a valid AACT/ctgov Postgres data source.
 
 ---
 
-**Local development — Backend**
+## Local development
 
-Prerequisites: Python 3.11+, pip, Postgres (or use Docker compose above).
+### Backend
 
-1. Create a virtualenv and install dependencies:
+1. Create and activate a virtual environment:
 
 ```bash
 cd backend
 python -m venv .venv
-source .venv/bin/activate   # on Windows: .venv\\Scripts\\activate
+.venv/Scripts/activate   # Windows
 pip install -r requirements.txt
 ```
 
-2. Environment variables (example `.env`):
+2. Create a `.env` file with:
 
-```
+```env
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/clinical_trials
+AACT_DATABASE_URL=postgresql://user:pass@host:5432/aact
+AACT_SCHEMA=ctgov
+OLLAMA_URL=http://localhost:11434/api/generate
 GROQ_API_KEY=<your-groq-api-key>
 GROQ_MODEL=llama-3.1-8b-instant
-OLLAMA_URL=http://localhost:11434/api/generate
+NCBI_API_KEY=<optional>
 ```
 
-3. Initialize DB tables (SQLAlchemy creates tables on startup) and run the app:
+3. Start the backend:
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-4. Useful backend files:
-- API & router entry: [backend/app/main.py](backend/app/main.py#L1)
-- Trials routes: [backend/app/api/trials.py](backend/app/api/trials.py#L1)
-- Classification route: [backend/app/api/classify.py](backend/app/api/classify.py#L1)
-- Ingest route: [backend/app/api/ingest.py](backend/app/api/ingest.py#L1)
-- DB config: [backend/app/database/db.py](backend/app/database/db.py#L1)
-- Models: [backend/app/models/trial.py](backend/app/models/trial.py#L1)
-- Classifier implementation: [backend/app/services/ml_classifier.py](backend/app/services/ml_classifier.py#L1)
-- Requirements: [backend/requirements.txt](backend/requirements.txt)
+### Frontend
 
----
-
-**Local development — Frontend**
-
-1. From the repo root:
+From the root:
 
 ```bash
 cd frontend
@@ -132,111 +126,110 @@ npm install
 npm run dev
 ```
 
-2. Ensure the frontend can reach the backend by setting `NEXT_PUBLIC_API_URL` (defaults in `docker-compose.yml` to `http://localhost:8001`). See [frontend/package.json](frontend/package.json) for scripts.
+If the backend runs on a non-default port, set `NEXT_PUBLIC_API_URL` accordingly.
 
 ---
 
-**Environment variables**
-- `DATABASE_URL`: SQLAlchemy DB URL (defaults to `postgresql://postgres:postgres@localhost:5432/clinical_trials` in development). See [backend/app/database/db.py](backend/app/database/db.py#L1).
-- `GROQ_API_KEY`: API key for Groq remote inference. When set, the backend uses Groq as the primary classifier.
-- `GROQ_MODEL`: Groq model name to use for classification. Default is `llama-3.3-70b-versatile`; this repo also supports overrides such as `llama-3.1-8b-instant` for lower-cost tests.
-- `OLLAMA_URL`: Ollama generate endpoint (e.g. `http://ollama:11434/api/generate`). Default set in [docker-compose.yml](docker-compose.yml).
-- `NEXT_PUBLIC_API_URL`: Frontend API base URL (e.g. `http://localhost:8001`). See [frontend/package.json](frontend/package.json).
+## Environment variables
+
+- `DATABASE_URL` — backend persistence database URL.
+- `AACT_DATABASE_URL` — AACT Postgres source for trial ingestion.
+- `AACT_SCHEMA` — AACT schema name, default `ctgov`.
+- `OLLAMA_URL` — Ollama generation endpoint.
+- `OLLAMA_MODEL` — Ollama model name, default `qwen3:1.7b`.
+- `GROQ_API_KEY` — Groq API key for remote inference.
+- `GROQ_MODEL` — Groq model name, default `llama-3.3-70b-versatile`.
+- `NCBI_API_KEY` — Optional NCBI key for PubMed requests.
+- `NEXT_PUBLIC_API_URL` — frontend backend base URL.
 
 ---
 
-**Database & migrations**
+## API reference
 
-This project uses SQLAlchemy models and Alembic for migrations. Alembic config is present at `backend/alembic.ini`.
+### Health
 
-Common commands (run from `backend`):
-
-```bash
-# generate migration after model changes
-alembic revision --autogenerate -m "describe change"
-# apply migrations
-alembic upgrade head
-```
-
-If you prefer Docker-managed DB for local dev, `docker-compose up` will create the `db` service automatically.
-
----
-
-**API reference (selected endpoints)**
-
-Base: `GET /` → simple API metadata
-
+- `GET /` — API metadata
 - `GET /health` — health check
+
+### Trials
+
 - `GET /trials` — list trials with pagination and filters
-  - Query params: `page`, `page_size`, `search`, `phase`, `failure_category`, `overall_status`, `min_score`, `max_score`
-  - See implementation: [backend/app/api/trials.py](backend/app/api/trials.py#L1)
 - `GET /trials/stats` — dashboard statistics
-- `GET /trials/{trial_id}` — fetch by internal id
-- `GET /trials/nct/{nct_id}` — fetch by NCT identifier
-- `PATCH /trials/{trial_id}` — partial update (salvageability, category, recommended actions)
-- `DELETE /trials/{trial_id}` — delete trial
+- `GET /trials/{trial_id}` — retrieve trial by ID
+- `GET /trials/nct/{nct_id}` — retrieve trial by NCT ID
+- `PATCH /trials/{trial_id}` — update a trial
+- `DELETE /trials/{trial_id}` — delete a trial
 
-- `POST /classify` — classify termination reason
-  - Body: `{ "why_stopped": "...", "drug_name": "...", "phase": "..." }`
-  - Response: classification category, score, recommended actions. See: [backend/app/api/classify.py](backend/app/api/classify.py#L1)
+### Classification
 
-- `POST /ingest` — run an ingestion synchronously
-  - Query params: `max_results`, `condition`, `intervention`
-- `POST /ingest/background` — enqueue ingestion as a background task
-  - Triggers fetcher → classifier → upsert pipeline. See: [backend/app/api/ingest.py](backend/app/api/ingest.py#L1)
+- `POST /classify` — classify a termination reason
+  - Example payload: `{ "why_stopped": "Stopped for futility at interim analysis" }`
 
-Example curl (classify):
+### Ingestion
 
-```bash
-curl -X POST "http://localhost:8001/classify" -H "Content-Type: application/json" \
-  -d '{"why_stopped":"Stopped for futility at interim analysis","drug_name":"ExampleDrug","phase":"Phase 2"}'
-```
+- `POST /ingest` — run ingestion synchronously
+- `POST /ingest/background` — enqueue ingestion in background
 
----
+### Molecules
 
-**Project structure (key files)**
-- [backend/](backend) — FastAPI backend and services
-  - [backend/app/main.py](backend/app/main.py#L1) — FastAPI app entry
-  - [backend/app/api/](backend/app/api) — API routes
-  - [backend/app/services/](backend/app/services) — fetcher, classifier, trial service
-  - [backend/app/models/](backend/app/models) — SQLAlchemy models and Pydantic schemas
-- [frontend/](frontend) — Next.js frontend
-- [docker-compose.yml](docker-compose.yml) — orchestrates DB, Ollama, backend, frontend
+- `GET /molecules` — list molecules
+- `GET /molecules/stats` — molecule library stats
+- `GET /molecules/export` — export molecules as Excel
+- `GET /molecules/{id}` — view molecule detail
+- `POST /molecules/{id}/hypotheses` — generate repurposing hypotheses
 
 ---
 
-**Development notes & tips**
-- Groq / Groq API: the project now prefers Groq with a Llama-based model as the primary classification engine. Set `GROQ_API_KEY` and optionally `GROQ_MODEL` in `.env`.
-- Ollama: this project retains Ollama as a fallback. If Groq is unavailable or the Groq API key is missing, the classifier falls back to Ollama Qwen3:1.7b.
-- If both Groq and Ollama fail, the system uses a BiomedBERT embeddings emergency fallback to keep classification working.
-- Example low-cost override: `GROQ_MODEL=llama-3.1-8b-instant`.
+## Data model
 
-**Known limitations and drawbacks**
-- The new Groq primary flow introduces an external API dependency and requires a valid `GROQ_API_KEY`.
-- Groq model usage may increase latency and cost compared to the previous on-prem Ollama-only setup.
-- Smaller Llama variants like `llama-3.1-8b-instant` can reduce cost, but may also lower classification accuracy and confidence.
-- The fallback chain helps resilience, but each step may produce different category outputs and confidence scores.
-- Classification remains heuristic-driven for trial-specific failure modes; the model is not a medical-grade decision system and should be validated before production use.
-- The classifier blends an LLM confidence score with rule-based baseline scores; see [backend/app/services/ml_classifier.py](backend/app/services/ml_classifier.py#L1).
-- If using a remote Postgres (Heroku/Supabase), ensure `DATABASE_URL` begins with `postgresql://` (the backend auto-fixes `postgres://`).
+### Trial model
+
+- `failed_trials` — stores ingested trial metadata, classification results, salvageability scores, and scoring breakdowns.
+
+### Molecule intelligence
+
+- `molecules` — canonical molecule registry with PubChem/ChEMBL resolution, modality, mechanism, target biology, aggregated trial signals, IP, and literature.
+- `molecule_trials` — links trials to molecules.
+- `molecule_patents` — patent records per molecule.
+- `molecule_literature` — PubMed publications per molecule.
 
 ---
 
-**Contributing**
+## Project structure
 
-Contributions welcome — open an issue or PR. Suggested flow:
-1. Fork repository
+- `backend/app/main.py` — FastAPI app entrypoint
+- `backend/app/database/db.py` — SQLAlchemy engine and session
+- `backend/app/api/` — REST route definitions
+- `backend/app/models/` — SQLAlchemy and Pydantic models
+- `backend/app/services/` — ingestion, classification, scoring, resolution, enrichment, and CRUD logic
+- `frontend/pages/` — Next.js dashboard, classify, ingest, trials, and molecules pages
+- `frontend/services/api.ts` — frontend API client
+- `docker-compose.yml` — dev orchestration
+
+---
+
+## Notes
+
+- The ingestion pipeline is built for an AACT-compatible Postgres source, not the ClinicalTrials.gov REST API.
+- If `GROQ_API_KEY` is absent, the backend falls back to Ollama and then to an embeddings-based fallback.
+- Molecule resolution depends on PubChem and ChEMBL public APIs.
+- `openpyxl` is required for the `/molecules/export` endpoint.
+
+---
+
+## Contributing
+
+Contributions welcome. Suggested flow:
+1. Fork the repository
 2. Create a feature branch
-3. Run tests / verify locally
-4. Open PR with description and screenshot (if UI changes)
+3. Verify locally
+4. Open a PR with a description
 
 ---
 
-**License & attribution**
+## License
 
-This project currently does not include a license file. Add a `LICENSE` to clarify terms.
-
----
+This repository currently does not include a license file. Add a `LICENSE` to clarify terms.
 
 If you'd like, I can also:
 - add API examples as a separate `docs/` folder
