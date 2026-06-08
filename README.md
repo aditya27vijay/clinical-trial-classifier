@@ -231,7 +231,3 @@ Contributions welcome. Suggested flow:
 
 This repository currently does not include a license file. Add a `LICENSE` to clarify terms.
 
-If you'd like, I can also:
-- add API examples as a separate `docs/` folder
-- generate OpenAPI examples or a Postman collection
-- add CI steps for linting, tests, and Docker image builds
