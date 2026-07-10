@@ -1,10 +1,11 @@
 """
 SQLAlchemy models for the molecule intelligence layer.
-Four tables:
-  molecules          — deduplicated master molecule registry
-  molecule_trials    — join: which trials a molecule appeared in
-  molecule_patents   — USPTO patent records per molecule
-  molecule_literature — PubMed references per molecule
+Five tables:
+  molecules                 — deduplicated master molecule registry
+  molecule_trials           — join: which trials a molecule appeared in, with timeline fields
+  molecule_patents          — USPTO patent records per molecule
+  molecule_literature       — PubMed references per molecule
+  molecule_real_world_usage — approved/investigational indications from OpenTargets / DrugBank
 """
 
 from sqlalchemy import (
@@ -52,6 +53,10 @@ class Molecule(Base):
     avg_salvageability      = Column(Numeric(5, 2), nullable=True)
     latest_phase_reached    = Column(String(50), nullable=True)
 
+    # ── Usage timeline (derived from molecule_trials) ─────────────────────────
+    first_studied           = Column(Date, nullable=True)   # earliest trial start_date
+    last_active             = Column(Date, nullable=True)   # latest trial completion/start date
+
     # ── Patent ────────────────────────────────────────────────────────────────
     earliest_patent_date    = Column(Date, nullable=True)
     patent_expiry_date      = Column(Date, nullable=True)
@@ -70,9 +75,17 @@ class Molecule(Base):
     has_posted_results      = Column(Boolean, default=False)
     repurposing_hypotheses  = Column(JSON, nullable=True)
 
+    # ── Real-world / approved usage (OpenTargets / DrugBank) ──────────────────
+    drugbank_id             = Column(String(20), nullable=True, index=True)
+    approval_status         = Column(String(30), nullable=True)  # approved/investigational/withdrawn/experimental/unknown
+
     # ── Data quality ──────────────────────────────────────────────────────────
-    resolution_source       = Column(String(30), nullable=True)   # pubchem/chembl/manual/unresolved
+    resolution_source       = Column(String(30), nullable=True)   # pubchem/chembl/pubchem+chembl/manual/unresolved
     resolution_confidence   = Column(Numeric(3, 2), nullable=True)
+    resolution_method       = Column(String(30), nullable=True)   # exact_name/synonym/parent_compound/fuzzy/manual
+    resolution_conflict     = Column(Boolean, default=False)      # True if PubChem/ChEMBL structures disagreed
+    is_combination          = Column(Boolean, default=False)
+    combination_components  = Column(JSON, nullable=True)  # [{"name": "...", "molecule_id": ...}, ...]
 
     created_at              = Column(DateTime(timezone=True), server_default=func.now())
     updated_at              = Column(DateTime(timezone=True), onupdate=func.now())
@@ -81,6 +94,7 @@ class Molecule(Base):
     trials      = relationship("MoleculeTrial",    back_populates="molecule", cascade="all, delete-orphan")
     patents     = relationship("MoleculePatent",   back_populates="molecule", cascade="all, delete-orphan")
     literature  = relationship("MoleculeLiterature", back_populates="molecule", cascade="all, delete-orphan")
+    real_world_usage = relationship("MoleculeRealWorldUsage", back_populates="molecule", cascade="all, delete-orphan")
 
 
 class MoleculeTrial(Base):
@@ -93,6 +107,13 @@ class MoleculeTrial(Base):
     phase                = Column(String(50), nullable=True)
     failure_category     = Column(String(100), nullable=True)
     salvageability_score = Column(Integer, nullable=True)
+
+    # ── Usage-timeline fields ("when and where it was used") ─────────────────
+    sponsor              = Column(String(300), nullable=True)
+    status               = Column(String(50), nullable=True)   # TERMINATED/WITHDRAWN/SUSPENDED/COMPLETED
+    start_date           = Column(Date, nullable=True)
+    completion_date      = Column(Date, nullable=True)
+    why_stopped          = Column(Text, nullable=True)
 
     molecule = relationship("Molecule", back_populates="trials")
 
@@ -139,4 +160,35 @@ class MoleculeLiterature(Base):
 
     __table_args__ = (
         UniqueConstraint("molecule_id", "pmid", name="uq_molecule_pmid"),
+    )
+
+
+class MoleculeRealWorldUsage(Base):
+    """
+    Approved / investigational / withdrawn indications for a molecule,
+    sourced from OpenTargets (free, target-disease association) and/or
+    DrugBank (license-gated — populated only if DRUGBANK_API_KEY is configured).
+
+    This is what lets Peptris say "this molecule already succeeded somewhere
+    else" — a signal that is currently invisible to the purely trial-derived
+    aggregates on Molecule.
+    """
+    __tablename__ = "molecule_real_world_usage"
+
+    id                 = Column(BigInteger, primary_key=True, index=True)
+    molecule_id        = Column(BigInteger, ForeignKey("molecules.id", ondelete="CASCADE"), nullable=False)
+
+    indication         = Column(String(300), nullable=False)   # disease/condition name
+    disease_id         = Column(String(30), nullable=True)     # e.g. EFO/MONDO id from OpenTargets
+    approval_status    = Column(String(30), nullable=True)     # approved/investigational/withdrawn
+    region             = Column(String(10), nullable=True)     # US/EU/JP/GLOBAL — null if unknown
+    association_score  = Column(Numeric(4, 3), nullable=True)  # OpenTargets 0-1 target-disease score
+    approved_date       = Column(Date, nullable=True)
+    source             = Column(String(20), nullable=False)    # opentargets/drugbank
+    external_id        = Column(String(30), nullable=True)     # DrugBank ID or OpenTargets disease ID
+
+    molecule = relationship("Molecule", back_populates="real_world_usage")
+
+    __table_args__ = (
+        UniqueConstraint("molecule_id", "indication", "source", name="uq_molecule_indication_source"),
     )

@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL        = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-GROQ_API_URL      = "https://api.groq.com/openai/v1/chat/completions"
+NVIDIA_API_KEY    = os.getenv("NVIDIA_API_KEY", "")
+NVIDIA_MODEL      = os.getenv("NVIDIA_MODEL", "deepseek-ai/deepseek-v4-pro")
+NVIDIA_API_URL    = "https://integrate.api.nvidia.com/v1/chat/completions"
 
 OLLAMA_URL        = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
 OLLAMA_MODEL      = os.getenv("OLLAMA_MODEL", "qwen3:1.7b")
@@ -243,85 +243,77 @@ def _build_trial_context(
     return "\n".join(lines)
 
 
-# ─── Groq Classifier (Primary) ───────────────────────────────────────────────
+# ─── Deepseek Classifier (Primary) ───────────────────────────────────────────────
 
-def _classify_with_groq(
+def _classify_with_nvidia(
     why_stopped: str,
     trial_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, float, dict]:
-    """
-    Primary classifier — Groq API with Llama-3.3-70b-versatile.
-    Falls back to Ollama if GROQ_API_KEY not set or API call fails.
-    """
-    if not GROQ_API_KEY:
-        logger.warning("[Groq] No API key set, skipping to Ollama fallback")
+    if not NVIDIA_API_KEY:
+        logger.warning("[NVIDIA] No API key set, skipping to Ollama fallback")
         return "Unknown", 0.0, {}
 
     prompt = _build_trial_context(why_stopped, trial_context)
 
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {NVIDIA_API_KEY}",
         "Content-Type":  "application/json",
     }
-
     payload = {
-        "model":       GROQ_MODEL,
+        "model": NVIDIA_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": prompt},
         ],
-        "temperature":    0.1,
-        "max_tokens":     400,
-        "response_format": {"type": "json_object"},
+        "temperature": 0.1,
+        "max_tokens":  400,
     }
 
     try:
-        resp = http_requests.post(
-            GROQ_API_URL, headers=headers, json=payload, timeout=30
-        )
+        logger.info(f"[NVIDIA] Sending payload: {json.dumps(payload)[:500]}")  # log first 500 chars
+        resp = http_requests.post(NVIDIA_API_URL, headers=headers, json=payload, timeout=60)
         resp.raise_for_status()
         raw_text = resp.json()["choices"][0]["message"]["content"]
+
+        # Strip any markdown code fences
+        raw_text = re.sub(r"```json|```", "", raw_text).strip()
 
         result   = json.loads(raw_text)
         category = result.get("category", "Unknown")
 
         if category not in VALID_CATEGORIES:
-            logger.warning(f"[Groq] Invalid category '{category}', defaulting Unknown")
+            logger.warning(f"[NVIDIA] Invalid category '{category}', defaulting Unknown")
             category = "Unknown"
 
         confidence = float(result.get("confidence", 0.8))
-        logger.info(f"[Groq] '{(why_stopped or '')[:60]}' → {category} ({confidence:.2f})")
+        logger.info(f"[NVIDIA] '{(why_stopped or '')[:60]}' → {category} ({confidence:.2f})")
         return category, confidence, result
 
     except http_requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 429:
-            retry_after = int(e.response.headers.get("retry-after", 30))
-            logger.warning(f"[Groq] Rate limit hit — waiting {retry_after}s then retrying once")
-            time.sleep(retry_after)
+            logger.warning("[NVIDIA] Rate limited — waiting 5s then retrying once")
+            time.sleep(5)
             try:
-                resp = http_requests.post(
-                    GROQ_API_URL, headers=headers, json=payload, timeout=30
-                )
+                resp = http_requests.post(NVIDIA_API_URL, headers=headers, json=payload, timeout=30)
                 resp.raise_for_status()
-                raw_text = resp.json()["choices"][0]["message"]["content"]
+                raw_text = re.sub(r"```json|```", "", resp.json()["choices"][0]["message"]["content"]).strip()
                 result   = json.loads(raw_text)
                 category = result.get("category", "Unknown")
                 if category not in VALID_CATEGORIES:
                     category = "Unknown"
                 confidence = float(result.get("confidence", 0.8))
-                logger.info(f"[Groq] Retry succeeded → {category} ({confidence:.2f})")
+                logger.info(f"[NVIDIA] Retry succeeded → {category} ({confidence:.2f})")
                 return category, confidence, result
             except Exception as retry_err:
-                logger.error(f"[Groq] Retry failed: {retry_err} — falling back to Ollama")
+                logger.error(f"[NVIDIA] Retry failed: {retry_err} — falling back to Ollama")
                 return "Unknown", 0.0, {}
         else:
-            logger.error(f"[Groq] HTTP error: {e}")
+            logger.error(f"[NVIDIA] HTTP error: {e}")
             return "Unknown", 0.0, {}
 
     except (json.JSONDecodeError, KeyError, Exception) as e:
-        logger.error(f"[Groq] Failed: {e}")
+        logger.error(f"[NVIDIA] Failed: {e}")
         return "Unknown", 0.0, {}
-
 
 # ─── Ollama Classifier (Fallback) ────────────────────────────────────────────
 
@@ -450,12 +442,12 @@ def _classify(
     source: 'groq' | 'ollama' | 'embeddings'
     """
     # ── Level 1: Groq (primary) ───────────────────────────────────────────────
-    category, confidence, llm_result = _classify_with_groq(why_stopped, trial_context)
+    category, confidence, llm_result = _classify_with_nvidia(why_stopped, trial_context)
     if confidence > 0.0:
-        return category, confidence, llm_result, "groq"
+        return category, confidence, llm_result, "nvidia"
 
     # ── Level 2: Ollama (secondary) ───────────────────────────────────────────
-    logger.warning("[Classifier] Groq unavailable — trying Ollama")
+    logger.warning("[Classifier] NVIDIA unavailable — trying Ollama")
     category, confidence, llm_result = _classify_with_ollama(why_stopped, trial_context)
     if confidence > 0.0:
         return category, confidence, llm_result, "ollama"

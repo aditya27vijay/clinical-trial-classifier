@@ -118,8 +118,8 @@ def _run_ingest(
                 trial_context=full_trial,
             )
 
-            # Rate limit buffer for Groq
-            time.sleep(4)
+            # Rate limit buffer for Nvidia
+            time.sleep(10)
 
             # ── Step 3: Persist trial ─────────────────────────────────────────
             drug_names = full_trial.get("drug_names") or []
@@ -162,6 +162,9 @@ def _run_ingest(
                 })
 
                 # Link trial → molecule
+                # sponsor/status/start_date/completion_date/why_stopped power the
+                # usage timeline (get_usage_timeline) — "when and where" this
+                # molecule was actually studied, not just the aggregate counts.
                 molecule_service.link_trial(
                     db,
                     molecule_id          = mol.id,
@@ -170,6 +173,11 @@ def _run_ingest(
                     phase                = full_trial.get("phase"),
                     failure_category     = category,
                     salvageability_score = score,
+                    sponsor              = full_trial.get("sponsor"),
+                    status               = full_trial.get("overall_status"),
+                    start_date           = full_trial.get("start_date"),
+                    completion_date      = full_trial.get("completion_date"),
+                    why_stopped          = why_stopped or None,
                 )
 
                 # Recompute aggregates (score, phase, indications)

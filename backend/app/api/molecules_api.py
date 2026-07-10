@@ -20,7 +20,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database.db import get_db, SessionLocal
-from app.models.molecule_model import Molecule, MoleculeTrial, MoleculePatent, MoleculeLiterature
+from app.models.molecule_model import (
+    Molecule, MoleculeTrial, MoleculePatent, MoleculeLiterature, MoleculeRealWorldUsage
+)
 from app.services import molecule_service
 
 logger = logging.getLogger(__name__)
@@ -108,6 +110,50 @@ class MoleculeDetail(MoleculeListItem):
     literature:              List[LiteratureOut] = []
     class Config:
         from_attributes = True
+
+
+class TimelineEntryOut(BaseModel):
+    """One trial in a molecule's usage timeline — 'when and where it was used'."""
+    nct_id:               str
+    indication:           Optional[str]
+    phase:                Optional[str]
+    sponsor:              Optional[str]
+    status:               Optional[str]
+    start_date:           Optional[str]
+    completion_date:      Optional[str]
+    failure_category:     Optional[str]
+    why_stopped:          Optional[str]
+    salvageability_score: Optional[int]
+
+
+class MoleculeTimelineResponse(BaseModel):
+    molecule_id:    int
+    canonical_name: str
+    first_studied:  Optional[Any]
+    last_active:    Optional[Any]
+    total_trials:   int
+    trials:         List[TimelineEntryOut]
+
+
+class RealWorldUsageOut(BaseModel):
+    indication:        str
+    disease_id:        Optional[str]
+    approval_status:   Optional[str]
+    region:            Optional[str]
+    association_score: Optional[Any]
+    approved_date:     Optional[Any]
+    source:            str
+    external_id:       Optional[str]
+    class Config:
+        from_attributes = True
+
+
+class MoleculeRealWorldUsageResponse(BaseModel):
+    molecule_id:     int
+    canonical_name:  str
+    approval_status: Optional[str]
+    drugbank_id:     Optional[str]
+    indications:     List[RealWorldUsageOut]
 
 
 class MoleculeListResponse(BaseModel):
@@ -279,6 +325,53 @@ def get_molecule(molecule_id: int, db: Session = Depends(get_db)):
     if not mol:
         raise HTTPException(status_code=404, detail="Molecule not found")
     return mol
+
+
+@router.get("/{molecule_id}/timeline", response_model=MoleculeTimelineResponse)
+def get_molecule_timeline(molecule_id: int, db: Session = Depends(get_db)):
+    """
+    Chronological usage history for a molecule — every trial it appeared in,
+    ordered by start date, with sponsor, phase, indication, status, and how
+    it ended. This is the "when and where it was used" view for BD teams,
+    as distinct from the aggregate counts on the molecule list/detail routes.
+    """
+    mol = molecule_service.get_molecule_by_id(db, molecule_id)
+    if not mol:
+        raise HTTPException(status_code=404, detail="Molecule not found")
+
+    timeline = molecule_service.get_usage_timeline(db, molecule_id)
+
+    return MoleculeTimelineResponse(
+        molecule_id=mol.id,
+        canonical_name=mol.canonical_name,
+        first_studied=mol.first_studied,
+        last_active=mol.last_active,
+        total_trials=len(timeline),
+        trials=timeline,
+    )
+
+
+@router.get("/{molecule_id}/real-world-usage", response_model=MoleculeRealWorldUsageResponse)
+def get_molecule_real_world_usage(molecule_id: int, db: Session = Depends(get_db)):
+    """
+    Approved / investigational / withdrawn indications for a molecule, sourced
+    from OpenTargets (free) and DrugBank (only populated if DRUGBANK_API_KEY
+    is configured). This is the "did this molecule already succeed somewhere
+    else" signal — not derivable from trial data alone.
+    """
+    mol = molecule_service.get_molecule_by_id(db, molecule_id)
+    if not mol:
+        raise HTTPException(status_code=404, detail="Molecule not found")
+
+    records = molecule_service.get_real_world_usage(db, molecule_id)
+
+    return MoleculeRealWorldUsageResponse(
+        molecule_id=mol.id,
+        canonical_name=mol.canonical_name,
+        approval_status=mol.approval_status,
+        drugbank_id=mol.drugbank_id,
+        indications=records,
+    )
 
 
 @router.post("/{molecule_id}/hypotheses")
