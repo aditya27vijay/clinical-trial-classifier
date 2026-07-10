@@ -69,6 +69,47 @@ export interface TrialFilters {
   max_score?: number;
 }
 
+export interface TimelineEntry {
+  nct_id: string;
+  indication?: string;
+  phase?: string;
+  sponsor?: string;
+  status?: string;
+  start_date?: string;
+  completion_date?: string;
+  failure_category?: string;
+  why_stopped?: string;
+  salvageability_score?: number;
+}
+
+export interface MoleculeTimeline {
+  molecule_id: number;
+  canonical_name: string;
+  first_studied?: string;
+  last_active?: string;
+  total_trials: number;
+  trials: TimelineEntry[];
+}
+
+export interface RealWorldUsageEntry {
+  indication: string;
+  disease_id?: string;
+  approval_status?: string;
+  region?: string;
+  association_score?: number;
+  approved_date?: string;
+  source: string;
+  external_id?: string;
+}
+
+export interface MoleculeRealWorldUsage {
+  molecule_id: number;
+  canonical_name: string;
+  approval_status?: string;
+  drugbank_id?: string;
+  indications: RealWorldUsageEntry[];
+}
+
 // ─── API Functions ────────────────────────────────────────────────────────────
 
 export const trialsApi = {
@@ -110,6 +151,18 @@ export const ingestApi = {
     intervention?: string;
   }): Promise<IngestResponse> => {
     const { data } = await api.post('/ingest/', null, { params });
+    return data;
+  },
+};
+
+export const moleculesApi = {
+  getTimeline: async (id: number): Promise<MoleculeTimeline> => {
+    const { data } = await api.get(`/molecules/${id}/timeline`);
+    return data;
+  },
+
+  getRealWorldUsage: async (id: number): Promise<MoleculeRealWorldUsage> => {
+    const { data } = await api.get(`/molecules/${id}/real-world-usage`);
     return data;
   },
 };

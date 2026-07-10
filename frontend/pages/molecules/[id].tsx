@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import Layout from "../../components/Layout";
+import { StatusChip, PhaseBadge } from "../../components/ui";
 import axios from "axios";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
@@ -14,6 +15,18 @@ const CATEGORY_COLORS: Record<string, string> = {
   "Endpoint failure":     "text-purple-400",
   "Operational issue":    "text-gray-400",
   "Unknown":              "text-gray-500",
+};
+
+const APPROVAL_COLORS: Record<string, string> = {
+  approved:        "bg-green-500/20 text-green-300 border-green-500/30",
+  investigational: "bg-blue-500/20 text-blue-300 border-blue-500/30",
+  withdrawn:       "bg-red-500/20 text-red-300 border-red-500/30",
+  unknown:         "bg-gray-500/20 text-gray-400 border-gray-500/30",
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  opentargets: "OpenTargets",
+  drugbank:    "DrugBank",
 };
 
 function ScoreGauge({ score }: { score: number }) {
@@ -57,6 +70,8 @@ export default function MoleculeDetailPage() {
   const router = useRouter();
   const { id }  = router.query;
   const [mol, setMol]               = useState<any>(null);
+  const [timeline, setTimeline]     = useState<any>(null);
+  const [rwu, setRwu]               = useState<any>(null);
   const [loading, setLoading]       = useState(true);
   const [genLoading, setGenLoading] = useState(false);
   const [genMsg, setGenMsg]         = useState("");
@@ -71,7 +86,19 @@ export default function MoleculeDetailPage() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchMolecule(); }, [id]);
+  const fetchTimelineAndUsage = async () => {
+    if (!id) return;
+    try {
+      const res = await axios.get(`${API}/molecules/${id}/timeline`);
+      setTimeline(res.data);
+    } catch { setTimeline(null); }
+    try {
+      const res = await axios.get(`${API}/molecules/${id}/real-world-usage`);
+      setRwu(res.data);
+    } catch { setRwu(null); }
+  };
+
+  useEffect(() => { fetchMolecule(); fetchTimelineAndUsage(); }, [id]);
 
   const generateHypotheses = async () => {
     setGenLoading(true);
@@ -134,6 +161,11 @@ export default function MoleculeDetailPage() {
                     "bg-gray-500/20 text-gray-400"
                   }`}>
                     IP {mol.ip_status}
+                  </span>
+                )}
+                {mol.approval_status && mol.approval_status !== "unknown" && (
+                  <span className={`text-xs px-2 py-1 rounded-full border ${APPROVAL_COLORS[mol.approval_status] || APPROVAL_COLORS.unknown}`}>
+                    {mol.approval_status === "approved" ? "✓ Approved elsewhere" : mol.approval_status}
                   </span>
                 )}
               </div>
@@ -212,14 +244,88 @@ export default function MoleculeDetailPage() {
                 </p>
               )}
             </Section>
+            {/* Real-world usage — approved/investigational indications elsewhere */}
+            <Section title="Real-World Usage">
+              {rwu?.indications?.length > 0 ? (
+                <div className="space-y-2">
+                  {rwu.indications.map((r: any, i: number) => (
+                    <div key={i} className="border border-white/5 rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm text-white font-medium">{r.indication}</p>
+                        <span className={`text-xs px-2 py-0.5 rounded-full border shrink-0 ${APPROVAL_COLORS[r.approval_status] || APPROVAL_COLORS.unknown}`}>
+                          {r.approval_status || "unknown"}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-500">
+                        <span>{SOURCE_LABELS[r.source] || r.source}</span>
+                        {r.region && <span>· {r.region}</span>}
+                        {r.approved_date && <span>· {String(r.approved_date).slice(0, 4)}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">
+                  No approved/investigational indications found yet.<br />
+                  <span className="text-xs">Sourced from OpenTargets{rwu?.drugbank_id ? " and DrugBank" : ""}.</span>
+                </p>
+              )}
+            </Section>
           </div>
 
           {/* Right column */}
           <div className="lg:col-span-2 space-y-6">
 
-            {/* Failed trials */}
-            <Section title="Failed Trials">
-              {mol.trials?.length > 0 ? (
+            {/* Trial timeline — "when and where it was used" */}
+            <Section title="Trial Timeline">
+              {timeline?.trials?.length > 0 ? (
+                <div className="space-y-3">
+                  {(timeline.first_studied || timeline.last_active) && (
+                    <p className="text-xs text-gray-500 mb-2">
+                      Studied {timeline.first_studied ? String(timeline.first_studied).slice(0, 10) : "—"}
+                      {" → "}
+                      {timeline.last_active ? String(timeline.last_active).slice(0, 10) : "—"}
+                    </p>
+                  )}
+                  {timeline.trials.map((t: any) => (
+                    <div key={t.nct_id} className="border border-white/5 rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <Link href={`/trials/${t.nct_id}`}>
+                          <span className="text-xs text-gray-500 font-mono hover:text-blue-400 cursor-pointer">{t.nct_id}</span>
+                        </Link>
+                        <div className="flex items-center gap-2">
+                          <PhaseBadge phase={t.phase} />
+                          <StatusChip status={t.status} />
+                        </div>
+                      </div>
+                      <p className="text-sm text-gray-300 mt-1.5">{t.indication || "—"}</p>
+                      <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500 flex-wrap">
+                        {t.sponsor && <span>{t.sponsor}</span>}
+                        {(t.start_date || t.completion_date) && (
+                          <span>
+                            {t.start_date ? String(t.start_date).slice(0, 10) : "?"}
+                            {" – "}
+                            {t.completion_date ? String(t.completion_date).slice(0, 10) : "?"}
+                          </span>
+                        )}
+                        <span className={CATEGORY_COLORS[t.failure_category] || "text-gray-500"}>
+                          {t.failure_category || "—"}
+                        </span>
+                        {t.salvageability_score != null && (
+                          <span className={`font-bold ${
+                            t.salvageability_score >= 70 ? "text-green-400" :
+                            t.salvageability_score >= 45 ? "text-yellow-400" : "text-red-400"
+                          }`}>{t.salvageability_score}</span>
+                        )}
+                      </div>
+                      {t.why_stopped && (
+                        <p className="text-xs text-gray-500 mt-1.5 italic line-clamp-2">"{t.why_stopped}"</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : mol.trials?.length > 0 ? (
+                // Fallback for trials ingested before the timeline fields existed
                 <div className="space-y-2">
                   {mol.trials.map((t: any) => (
                     <Link key={t.nct_id} href={`/trials/${t.nct_id}`}>

@@ -1,116 +1,165 @@
-# Clinical Trial Failure Intelligence System
+# Clinical Trial Intelligence MVP
 
-Molecule-first AI system for ingesting failed clinical trials, classifying why they stopped, estimating rescue potential, and generating molecule intelligence insights.
+A molecule-first intelligence platform for analyzing failed clinical trials, classifying why they stopped, estimating salvage potential, and surfacing repurposing opportunities for drug assets.
 
----
+## What this system does
 
-## Table of Contents
-- Overview
-- Architecture
-- Key features
-- Quickstart (Docker)
-- Local development
-- Environment variables
-- API reference
-- Data model
-- Project structure
-- Notes
-- Contributing
+The current codebase combines:
 
----
+- trial ingestion from an AACT-compatible PostgreSQL source
+- enrichment with design, sponsor, site, safety, and outcome metadata
+- AI-assisted failure classification with a layered inference pipeline
+- three-tier salvageability scoring for rescue potential
+- canonical molecule resolution and deduplication
+- molecule-level intelligence such as trial history, patent/IP signals, literature, and repurposing hypotheses
+- a Next.js frontend for exploration and workflow control
 
-## Overview
+## Current architecture
 
-This repository contains an MVP for analyzing terminated, withdrawn, and suspended clinical trials and surfacing potentially salvageable drug assets.
-The backend reads trial data from an AACT-style Postgres source, enriches each trial with design and results metadata, classifies trial failure reason through a layered LLM pipeline, computes a salvageability score, resolves drugs into canonical molecules, and enriches molecules with patent and PubMed evidence.
+- Backend: FastAPI + SQLAlchemy + Pydantic
+- Frontend: Next.js + React + Tailwind
+- Data store: PostgreSQL
+- Inference stack: NVIDIA/NIM-style chat API as primary, Ollama as fallback, embedding-based fallback for resilience
+- Enrichment: PubChem, ChEMBL, PubMed, patent/IP lookups, and real-world indication signals
 
-The frontend is a Next.js app that provides dashboards, trial browsing, molecule discovery, classification experiments, and ingestion controls.
+## Major capabilities
 
----
+### 1. Trial ingestion and enrichment
 
-## Architecture
+The backend can ingest terminated, withdrawn, or suspended trials from an AACT-style database and enrich each record with:
 
-The stack consists of:
+- trial design data
+- sponsor and site metadata
+- enrollment and duration context
+- safety and outcome information
+- reason for stopping and related trial context
 
-- `backend/` — FastAPI backend with SQLAlchemy persistence, ingestion logic, classification/scoring services, and molecule intelligence.
-- `frontend/` — Next.js UI that consumes backend endpoints.
-- `docker-compose.yml` — orchestrates Postgres, Ollama, backend, and frontend.
+### 2. AI-assisted failure classification
 
-### Core pipeline
+The main classifier in backend/app/services/ml_classifier.py evaluates trial context and classifies the primary failure reason into one of:
 
-1. Fetch terminated trial metadata from an AACT-compatible Postgres database.
-2. Enrich trials with design, sponsor, site, safety, outcome, and publication metadata.
-3. Classify termination reasons using:
-   - Groq remote model (primary)
-   - Ollama local model (fallback)
-   - BiomedBERT embeddings (emergency fallback)
-4. Compute a three-tier salvageability score.
-5. Persist trials into `failed_trials`.
-6. Resolve trial drug names into canonical `molecules` records.
-7. Enrich molecules with patents, literature, and optional repurposing hypotheses.
+- Recruitment failure
+- Business termination
+- Lack of efficacy
+- Toxicity
+- Endpoint failure
+- Operational issue
+- Unknown
 
----
+It also produces:
 
-## Key features
+- a confidence score
+- a salvageability modifier
+- recommendation hints
+- structured scoring metadata
 
-- Ingestion of terminated/withdrawn/suspended trials from AACT Postgres
-- LLM-backed failure category classification
-- Three-tier salvageability scoring model
-- Canonical molecule resolution using PubChem and ChEMBL
-- Molecule library with IP status, publication counts, and rescue signals
-- Excel export for BD-ready molecule reporting
-- Frontend dashboard, trial list, molecule library, classification page, and ingestion page
-- Background enrichment for patents and PubMed literature
+### 3. Three-tier salvageability scoring
 
----
+The scoring engine in backend/app/services/scorer.py computes a rescue score based on:
 
-## Quickstart (Docker)
+- protocol and design signals (Tier 1)
+- contextual enrichment (Tier 2)
+- results and safety evidence (Tier 3)
 
-From the repository root:
+The score is adjusted with modality-aware heuristics and LLM-derived signals.
 
-```bash
-docker-compose up -d --build
-```
+### 4. Molecule intelligence layer
 
-Default ports:
+After a trial is classified and stored, the system resolves the primary drug into a canonical molecule record and links it to the trial. The molecule layer now supports:
 
-- Postgres: `5433`
-- Ollama: `11434`
-- Backend: `8001`
-- Frontend: `3001`
+- PubChem and ChEMBL-based resolution
+- modality inference
+- mechanism and target extraction
+- aggregate rescue metrics per molecule
+- usage timeline tracking across linked trials
+- real-world indication/approval signals
+- patent/IP enrichment
+- PubMed literature enrichment
+- repurposing hypothesis generation
 
-Open the backend docs at `http://localhost:8001/docs` and the frontend at `http://localhost:3001`.
+### 5. BD-ready exports and exploration UI
 
-> Note: `docker-compose.yml` includes `AACT_DATABASE_URL` and expects a valid AACT/ctgov Postgres data source.
+The product includes:
 
----
+- a dashboard overview of trial volume and failure pattern distributions
+- a searchable failed-trials browser with score-based ranking
+- a molecule library with filters for modality, score, IP status, and publications
+- molecule detail pages with chemical identity, linked trials, patent/IP summary, literature, and hypotheses
+- Excel export for molecule intelligence reporting
+
+## Backend API surface
+
+### Health
+
+- GET /
+- GET /health
+
+### Trials
+
+- GET /trials/
+- GET /trials/stats
+- GET /trials/{trial_id}
+- GET /trials/nct/{nct_id}
+- PATCH /trials/{trial_id}
+- DELETE /trials/{trial_id}
+
+### Classification
+
+- POST /classify/
+
+### Ingestion
+
+- POST /ingest/
+- POST /ingest/background
+
+### Molecules
+
+- GET /molecules/
+- GET /molecules/stats
+- GET /molecules/export
+- GET /molecules/{molecule_id}
+- GET /molecules/{molecule_id}/timeline
+- GET /molecules/{molecule_id}/real-world-usage
+- POST /molecules/{molecule_id}/hypotheses
+
+## Frontend experience
+
+The UI includes pages for:
+
+- dashboard overview
+- failed trial review and filtering
+- trial detail inspection
+- molecule library browsing
+- molecule detail exploration
+- ingestion workflow initiation
+- classification experiments
+
+## Environment variables
+
+The backend expects the following environment variables:
+
+- DATABASE_URL — PostgreSQL URL for the application database
+- AACT_DATABASE_URL — source database for AACT-style ingestion
+- AACT_SCHEMA — schema name used for the AACT source (defaults to ctgov where applicable)
+- NVIDIA_API_KEY — primary model provider API key
+- NVIDIA_MODEL — primary model identifier
+- OLLAMA_URL — local Ollama endpoint
+- OLLAMA_MODEL — Ollama model name
+- NCBI_API_KEY — optional PubMed API key
+- NEXT_PUBLIC_API_URL — frontend base URL for the backend
 
 ## Local development
 
 ### Backend
 
-1. Create and activate a virtual environment:
-
 ```bash
 cd backend
 python -m venv .venv
-.venv/Scripts/activate   # Windows
+.venv\Scripts\activate   # Windows
 pip install -r requirements.txt
 ```
 
-2. Create a `.env` file with:
-
-```env
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/clinical_trials
-AACT_DATABASE_URL=postgresql://user:pass@host:5432/aact
-AACT_SCHEMA=ctgov
-OLLAMA_URL=http://localhost:11434/api/generate
-GROQ_API_KEY=<your-groq-api-key>
-GROQ_MODEL=llama-3.1-8b-instant
-NCBI_API_KEY=<optional>
-```
-
-3. Start the backend:
+Create a .env file and then start the API:
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -118,116 +167,48 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ### Frontend
 
-From the root:
-
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-If the backend runs on a non-default port, set `NEXT_PUBLIC_API_URL` accordingly.
+### Docker
 
----
+```bash
+docker-compose up -d --build
+```
 
-## Environment variables
+Default service ports:
 
-- `DATABASE_URL` — backend persistence database URL.
-- `AACT_DATABASE_URL` — AACT Postgres source for trial ingestion.
-- `AACT_SCHEMA` — AACT schema name, default `ctgov`.
-- `OLLAMA_URL` — Ollama generation endpoint.
-- `OLLAMA_MODEL` — Ollama model name, default `qwen3:1.7b`.
-- `GROQ_API_KEY` — Groq API key for remote inference.
-- `GROQ_MODEL` — Groq model name, default `llama-3.3-70b-versatile`.
-- `NCBI_API_KEY` — Optional NCBI key for PubMed requests.
-- `NEXT_PUBLIC_API_URL` — frontend backend base URL.
-
----
-
-## API reference
-
-### Health
-
-- `GET /` — API metadata
-- `GET /health` — health check
-
-### Trials
-
-- `GET /trials` — list trials with pagination and filters
-- `GET /trials/stats` — dashboard statistics
-- `GET /trials/{trial_id}` — retrieve trial by ID
-- `GET /trials/nct/{nct_id}` — retrieve trial by NCT ID
-- `PATCH /trials/{trial_id}` — update a trial
-- `DELETE /trials/{trial_id}` — delete a trial
-
-### Classification
-
-- `POST /classify` — classify a termination reason
-  - Example payload: `{ "why_stopped": "Stopped for futility at interim analysis" }`
-
-### Ingestion
-
-- `POST /ingest` — run ingestion synchronously
-- `POST /ingest/background` — enqueue ingestion in background
-
-### Molecules
-
-- `GET /molecules` — list molecules
-- `GET /molecules/stats` — molecule library stats
-- `GET /molecules/export` — export molecules as Excel
-- `GET /molecules/{id}` — view molecule detail
-- `POST /molecules/{id}/hypotheses` — generate repurposing hypotheses
-
----
-
-## Data model
-
-### Trial model
-
-- `failed_trials` — stores ingested trial metadata, classification results, salvageability scores, and scoring breakdowns.
-
-### Molecule intelligence
-
-- `molecules` — canonical molecule registry with PubChem/ChEMBL resolution, modality, mechanism, target biology, aggregated trial signals, IP, and literature.
-- `molecule_trials` — links trials to molecules.
-- `molecule_patents` — patent records per molecule.
-- `molecule_literature` — PubMed publications per molecule.
-
----
+- PostgreSQL: 5433
+- Ollama: 11434
+- Backend: 8001
+- Frontend: 3001
 
 ## Project structure
 
-- `backend/app/main.py` — FastAPI app entrypoint
-- `backend/app/database/db.py` — SQLAlchemy engine and session
-- `backend/app/api/` — REST route definitions
-- `backend/app/models/` — SQLAlchemy and Pydantic models
-- `backend/app/services/` — ingestion, classification, scoring, resolution, enrichment, and CRUD logic
-- `frontend/pages/` — Next.js dashboard, classify, ingest, trials, and molecules pages
-- `frontend/services/api.ts` — frontend API client
-- `docker-compose.yml` — dev orchestration
-
----
+- backend/app/main.py — FastAPI application entrypoint
+- backend/app/api/ — route modules for trials, classification, ingestion, and molecules
+- backend/app/services/ — scoring, classifier, ingestion, molecule resolution, and enrichment services
+- backend/app/models/ — SQLAlchemy and Pydantic models
+- frontend/pages/ — dashboard, trials, molecules, ingestion, and classification UI
+- frontend/services/api.ts — frontend API client
+- docker-compose.yml — local orchestration for DB, Ollama, backend, and frontend
 
 ## Notes
 
-- The ingestion pipeline is built for an AACT-compatible Postgres source, not the ClinicalTrials.gov REST API.
-- If `GROQ_API_KEY` is absent, the backend falls back to Ollama and then to an embeddings-based fallback.
-- Molecule resolution depends on PubChem and ChEMBL public APIs.
-- `openpyxl` is required for the `/molecules/export` endpoint.
-
----
+- The ingestion flow is designed for AACT-compatible PostgreSQL sources rather than the ClinicalTrials.gov REST endpoint directly.
+- The current API uses the ML-based classifier pipeline rather than the older simpler rule-based classifier.
+- Molecule enrichment and hypothesis generation may run asynchronously after ingestion.
+- The Excel export endpoint requires openpyxl.
 
 ## Contributing
 
-Contributions welcome. Suggested flow:
-1. Fork the repository
-2. Create a feature branch
-3. Verify locally
-4. Open a PR with a description
+Contributions are welcome. A typical workflow is:
 
----
-
-## License
-
-This repository currently does not include a license file. Add a `LICENSE` to clarify terms.
+1. fork the repository
+2. create a feature branch
+3. verify the relevant backend/frontend behavior locally
+4. open a pull request with a summary of the changes
 
